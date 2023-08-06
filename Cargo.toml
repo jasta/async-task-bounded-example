@@ -1,0 +1,7 @@
+[package]
+name = "async-task-bounded-example"
+version = "0.0.0"
+authors = ["Josh Guilfoyle <jasta@devtcg.org>"]
+edition = "2021"
+
+[dependencies]
