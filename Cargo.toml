@@ -5,3 +5,10 @@ authors = ["Josh Guilfoyle <jasta@devtcg.org>"]
 edition = "2021"
 
 [dependencies]
+crossbeam-channel = "0.5.8"
+async-task = "4.4.0"
+log = "0.4.19"
+env_logger = "0.10.0"
+anyhow = "1.0.71"
+atomic-waker = "1.1.1"
+rand = "0.8.5"
