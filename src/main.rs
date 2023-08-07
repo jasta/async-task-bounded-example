@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
 use atomic_waker::AtomicWaker;
+use env_logger::Env;
 use log::{debug, info, trace};
 use rand::Rng;
 use crate::bounded_executor::{BoundedExecutor, BoundedSpawner};
@@ -19,7 +20,7 @@ const TASK_SLEEP_MAX: Duration = Duration::from_millis(5);
 const PRINT_NTH_TASK: usize = 1000;
 
 fn main() -> anyhow::Result<()> {
-  env_logger::init();
+  env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
   let (runner, spawner) = BoundedExecutor::new(4).split();
   let spawner = Arc::new(spawner);
   let test = StressTest::new();
