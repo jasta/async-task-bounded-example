@@ -1,11 +1,11 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex};
-use async_task::{Runnable, Task};
+use std::sync::{Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use async_task::{Runnable};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use log::warn;
 
 pub struct BoundedRunner {
-  task_tracker: TaskTracker,
   receiver: Receiver<Runnable>,
 }
 
@@ -24,7 +24,6 @@ impl BoundedExecutor {
     let task_tracker = TaskTracker::new(queue_size);
     let (sender, receiver) = bounded(queue_size);
     let runner = BoundedRunner {
-      task_tracker: task_tracker.clone(),
       receiver,
     };
     let spawner = BoundedSpawner {
@@ -44,6 +43,17 @@ impl BoundedSpawner {
     where
         F: Future<Output=()> + Send + 'static
   {
+    if !self.task_tracker.prepare_to_spawn() {
+      return Err(SpawnError::QueueFull);
+    }
+
+    let tracker = self.task_tracker.clone();
+    let future_wrapper = async move {
+      let result = future.await;
+      tracker.mark_completion();
+      result
+    };
+
     let sender = self.sender.clone();
     let schedule = move |runnable| {
       match sender.try_send(runnable) {
@@ -55,63 +65,48 @@ impl BoundedSpawner {
       }
     };
 
-    let (runnable, task) = async_task::spawn(future, schedule);
+    let (runnable, task) = async_task::spawn(future_wrapper, schedule);
+    runnable.schedule();
+    task.detach();
 
-    match self.task_tracker.try_push(task) {
-      Ok(_) => {
-        runnable.schedule();
-        Ok(())
-      },
-      Err(_) => {
-        // Dropping the task canceled it, so we're good to just return an error...
-        Err(SpawnError::QueueFull)
-      },
-    }
+    Ok(())
   }
 }
 
 impl BoundedRunner {
   pub fn run_loop(self) {
     for runnable in self.receiver {
-      // If run() told us whether the task completed then we could actually just
-      // track total outstanding tasks with an AtomicUsize and save a lot of
-      // resources/complexity.
-      if !runnable.run() {
-        self.task_tracker.remove_all_finished_tasks();
-      }
+      runnable.run();
     }
   }
 }
 
 #[derive(Clone)]
 struct TaskTracker {
-  unfinished_tasks: Arc<Mutex<Vec<TaskRecord>>>,
+  unfinished_tasks: Arc<AtomicUsize>,
   max_tasks: usize,
 }
-
-struct TaskRecord(Task<()>);
 
 impl TaskTracker {
   pub fn new(max_tasks: usize) -> Self {
     Self {
-      unfinished_tasks: Arc::new(Mutex::new(Vec::with_capacity(max_tasks))),
+      unfinished_tasks: Arc::new(AtomicUsize::new(0)),
       max_tasks,
     }
   }
 
-  pub fn try_push(&self, task: Task<()>) -> Result<(), ()> {
-    let mut unfinished_tasks = self.unfinished_tasks.lock().unwrap();
-    if unfinished_tasks.len() >= self.max_tasks {
-      Err(())
+  pub fn prepare_to_spawn(&self) -> bool {
+    let previous = self.unfinished_tasks.fetch_add(1, Ordering::Relaxed);
+    if previous >= self.max_tasks {
+      self.unfinished_tasks.fetch_sub(1, Ordering::Relaxed);
+      false
     } else {
-      unfinished_tasks.push(TaskRecord(task));
-      Ok(())
+      true
     }
   }
 
-  pub fn remove_all_finished_tasks(&self) {
-    let mut unfinished_tasks = self.unfinished_tasks.lock().unwrap();
-    unfinished_tasks.retain(|t| !t.0.is_finished());
+  pub fn mark_completion(&self) {
+    self.unfinished_tasks.fetch_sub(1, Ordering::Relaxed);
   }
 }
 
